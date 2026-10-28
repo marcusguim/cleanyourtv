@@ -236,6 +236,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean dockRow;
     /** config single_row: every app in the dock's row, scrolling sideways, no grid below. */
     private boolean singleRow;
+    /** rows_below_dock 0: the grid under the dock stays hidden while focus is on the dock, and shows on Down. */
+    private boolean hideGridOnDock;
     /** The highlight springs past its target (config.xml, focus_overshoot); false goes straight there. */
     private boolean focusOvershoot;
     /** Festive skin from the theme (see Festival); applied while it is active today. */
@@ -609,6 +611,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // tvOS layout: push the dock row towards the bottom of the screen, leaving room for
         // rows_below_dock grid rows under it; the rest of the grid stays below until you press Down.
         int rowsBelowDock = cfg.rowsBelowDock;
+        hideGridOnDock = rowsBelowDock == 0 && dockRow && !singleRow;
         grid.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             int h = b - t;
             // Item height follows the tile size, which follows the columns and the rows that must fit (AppAdapter.tileWidthPx).
@@ -729,6 +732,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnReorder.setOnClickListener(v -> toggleReorder());
         btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
         if (!cfg.showNetworkPill) btnWifi.setVisibility(View.GONE);
+        if (!getResources().getBoolean(R.bool.show_settings_pill)) btnSettings.setVisibility(View.GONE);
         showInputsPill = cfg.showInputsPill;
         showInputsMenuRow = cfg.showInputsPill;
         btnLibraryTop = findViewById(R.id.btnLibraryTop);
@@ -1347,6 +1351,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         adapter.setReordering(true);
         if (adapter.hasEmptySlots()) reloadTiles();   // every position must hold a tile that can move
         reordering = true;
+        if (hideGridOnDock) dimOthers();   // every tile on show while the order is being changed
         orderAtStart = adapter.movableKeys();
         glass.setAccent(REORDER_ACCENT);
         btnReorder.setActivated(true);
@@ -1480,6 +1485,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return pos != RecyclerView.NO_POSITION && movingKey.equals(adapter.keyAt(pos)) ? 1f : 0.45f;
         }
         if (dockEditSlot >= 0 && pos >= 0 && pos < COLUMNS && pos != dockEditSlot) return 0.45f;
+        if (hideGridOnDock && !reordering && lastFocused < COLUMNS && pos >= COLUMNS) return 0f;
         return 1f;
     }
 
@@ -1491,6 +1497,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         dockEditAppKey = null;
         drop();
         reordering = false;
+        if (hideGridOnDock) dimOthers();
         adapter.setReordering(false);
         glass.setAccent(festive ? festival.accentColor() : 0);
         btnReorder.setActivated(false);
@@ -1626,8 +1633,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     public void onTileFocused(int position, View card) {
+        boolean gridWasHidden = lastFocused < COLUMNS;
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        // Down from the dock shows the grid, Up back onto the dock hides it again.
+        if (hideGridOnDock && gridWasHidden != (position < COLUMNS)) dimOthers();
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
         if (card.getWidth() == 0) {
@@ -1648,7 +1658,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         float y = r.exactCenterY() - h / 2f - (advancedEffects ? 4f * density : 0f);
 
         ViewGroup.LayoutParams lp = glass.getLayoutParams();
-        if (lp.width != (int) w || lp.height != (int) h || card.getWidth() != glassCardW) {
+        // The laid-out size too: a resize requested inside a layout pass at cold start can be dropped, leaving lp at
+        // the new size and the glass at the 10dp placeholder, which refitGlass spots but this check then skipped.
+        if (lp.width != (int) w || lp.height != (int) h || card.getWidth() != glassCardW
+                || glass.getWidth() != (int) w || glass.getHeight() != (int) h) {
             lp.width = (int) w;
             lp.height = (int) h;
             glass.setLayoutParams(lp);
